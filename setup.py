@@ -25,7 +25,7 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     # change to the privacy_meter when the repo is renamed
-    url="https://github.com/privacytrustlab/ml_privacy_meter",
+    url="https://github.com/changhongyan123/ml_privacy_meter",
     author_email="reza@comp.nus.edu.sg",
     maintainer="Hongyan Chang",
     maintainer_email="hongyan@comp.nus.edu.sg",
