@@ -19,7 +19,7 @@ except FileNotFoundError:
     long_description = DESCRIPTION
 
 setup(
-    name="Privacy-Meter",
+    name="privacy_meter",
     version=version,
     description=DESCRIPTION,
     long_description=long_description,
