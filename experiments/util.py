@@ -1,9 +1,21 @@
 """This file contains information about the utility functions."""
 from ast import List
+from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+
+def convert_f_to_int(number: Union[float, int], dataset_size: int):
+    """Small helper function that returns a fraction of the dataset size if it's a float, otherwise returns the number
+    Args:
+        dataset_size (int): Size of the whole dataset
+        number (float or int): Fraction of the dataset to generate or the size itself.
+
+    Returns:
+        size: Number of samples. Either int(number) or int(number*dataset_size) if number is a fraction
+    """
+    return int(float(number)*dataset_size) if float(number)<1 else min(int(float(number)),dataset_size)
 
 
 def check_configs(configs: dict):

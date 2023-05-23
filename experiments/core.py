@@ -21,7 +21,7 @@ from models import get_model
 from sklearn.model_selection import train_test_split
 from torch import nn
 from train import inference, train
-from util import get_split, load_models_by_conditions, load_models_by_model_idx
+from util import get_split, load_models_by_conditions, load_models_by_model_idx, convert_f_to_int
 
 from privacy_meter import audit_report
 from privacy_meter.audit import MetricEnum
@@ -61,7 +61,7 @@ def load_existing_target_model(
             "epochs": configs["train"]["epochs"],
             "learning_rate": configs["train"]["learning_rate"],
             "weight_decay": configs["train"]["weight_decay"],
-            "num_train": int(dataset_size * configs["data"]["f_train"]),
+            "num_train": convert_f_to_int(configs["data"]["f_train"], dataset_size),
         }
         matched_idx_list = load_models_by_conditions(
             model_metadata_dict, conditions, num_target_models
@@ -204,8 +204,8 @@ def load_dataset_for_existing_models(
     """
     assert isinstance(matched_idx, list)
     all_index = np.arange(dataset_size)
-    test_size = int(configs["f_test"] * dataset_size)
-    audit_size = int(configs["f_audit"] * dataset_size)
+    test_size = convert_f_to_int(configs["f_test"], dataset_size)
+    audit_size = convert_f_to_int(configs["f_audit"], dataset_size)
     index_list = []
     for metadata_idx in matched_idx:
         metadata = model_metadata_dict["model_metadata"][metadata_idx]
@@ -255,9 +255,9 @@ def prepare_datasets(dataset_size: int, num_datasets: int, configs: dict):
     # The index_list will save all the information about the train, test and auit for each target model.
     index_list = []
     all_index = np.arange(dataset_size)
-    train_size = int(configs["f_train"] * dataset_size)
-    test_size = int(configs["f_test"] * dataset_size)
-    audit_size = int(configs["f_audit"] * dataset_size)
+    train_size = convert_f_to_int(configs["f_train"], dataset_size)
+    test_size = convert_f_to_int(configs["f_test"], dataset_size)
+    audit_size = convert_f_to_int(configs["f_audit"], dataset_size)
     for _ in range(num_datasets):
         selected_index = np.random.choice(
             all_index, train_size + test_size, replace=False
@@ -313,7 +313,7 @@ def prepare_datasets_for_sample_privacy_risk(
             if data_type == "include":
                 train_index = np.random.choice(
                     all_index_exclude_z,
-                    int((configs["f_train"]) * dataset_size) - 1,
+                    convert_f_to_int(configs["f_train"], dataset_size) - 1,
                     replace=False,
                 )
                 index_list.append(
@@ -326,7 +326,7 @@ def prepare_datasets_for_sample_privacy_risk(
             elif data_type == "exclude":
                 train_index = np.random.choice(
                     all_index_exclude_z,
-                    int((configs["f_train"]) * dataset_size),
+                    convert_f_to_int(configs["f_train"], dataset_size),
                     replace=False,
                 )
                 index_list.append(
@@ -341,7 +341,7 @@ def prepare_datasets_for_sample_privacy_risk(
     elif split_method == "leave_one_out" and data_type == "include":
         train_index = np.random.choice(
             all_index_exclude_z,
-            int((configs["f_train"]) * dataset_size) - 1,
+            convert_f_to_int(configs["f_train"], dataset_size) - 1,
             replace=False,
         )
         for _ in range(num_models):
