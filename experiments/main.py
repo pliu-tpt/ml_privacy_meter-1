@@ -18,7 +18,7 @@ from core import (
     load_existing_models,
     load_existing_target_model,
     prepare_datasets,
-    prepare_datasets_for_online_attack,
+    prepare_datasets_for_online_attack_overlap,
     prepare_datasets_for_sample_privacy_risk,
     prepare_information_source,
     prepare_models,
@@ -43,9 +43,13 @@ from privacy_meter.model import PytorchModelTensor
 torch.backends.cudnn.benchmark = True
 
 
-def setup_log(name: str, save_file: bool):
+def str2bool(v):
+  return str(v).lower() in ("true", "1")
+
+def setup_log(report_dir: str, name: str, save_file: bool) -> logging.Logger:
     """Generate the logger for the current run.
     Args:
+        report_dir (str): folder name of the audit
         name (str): Logging file name.
         save_file (bool): Flag about whether to save to file.
     Returns:
@@ -53,9 +57,16 @@ def setup_log(name: str, save_file: bool):
     """
     my_logger = logging.getLogger(name)
     my_logger.setLevel(logging.INFO)
+
     if save_file:
-        log_format = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
-        filename = f"log_{name}.log"
+        log_format = logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(message)s"
+            )
+        filename = f"{report_dir}/log_{name}.log"
+
+        if not Path(filename).is_file():
+            open(filename, 'w+')
+
         log_handler = logging.FileHandler(filename, mode="w")
         log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(log_format)
@@ -63,6 +74,57 @@ def setup_log(name: str, save_file: bool):
 
     return my_logger
 
+def parse_extra(parser, configs):
+    """Using a parser and a base config, modify the config according to the parser
+    For bash experiments.
+    Args:
+        parser (Parser): Parser with the basic arguments
+        configs (dict): Dict that we want to change according to the parser
+    Returns:
+        configs: modified input config
+    """
+    for key in configs:
+        # Generate arguments for top-level keys
+        arg_name = '--{}'.format(key)
+        parser.add_argument(arg_name, dest=key, default=None,
+                            help='{} parameter'.format(arg_name))
+        for subkey in configs[key]:
+            # Generate arguments for second-level keys
+            arg_name = '--{}.{}'.format(key, subkey)
+            parser.add_argument(arg_name, dest=subkey, default=None,
+                                help='{} parameter'.format(arg_name))
+            if isinstance(configs[key][subkey], dict):
+                for subsubkey in configs[key][subkey]:
+                    # Generate arguments for eventual third-level keys
+                    arg_name = '--{}.{}.{}'.format(key, subkey, subsubkey)
+                    parser.add_argument(arg_name, dest=subsubkey, default=None,
+                                        help='{} parameter'.format(arg_name))
+    # Parse command-line arguments
+    args, unknown_args = parser.parse_known_args()
+    # Update configuration dictionary with command-line arguments
+    if args:
+        for key in configs:
+            if args.__dict__.get(key) is not None:
+                configs[key] = args.__dict__.get(key)
+            for subkey in configs[key]:
+                if args.__dict__.get(subkey) is not None:
+                    configs[key][subkey] = args.__dict__.get(subkey)
+                if isinstance(configs[key][subkey], dict):
+                    for subsubkey in configs[key][subkey]:
+                        arg_name = '{}.{}.{}'.format(key, subkey, subsubkey)
+                        if args.__dict__.get(subsubkey) is not None:
+                            configs[key][subkey][subsubkey] = args.__dict__.get(subsubkey)
+    return configs
+
+def metric_results(fpr_list, tpr_list):
+    acc = np.max(1 - (fpr_list + (1 - tpr_list)) / 2)
+    roc_auc = auc(fpr_list, tpr_list)
+
+    one_percent = tpr_list[np.where(fpr_list < 0.01)[0][-1]]
+    tenth_percent = tpr_list[np.where(fpr_list < 0.001)[0][-1]]
+    hundredth_percent = tpr_list[np.where(fpr_list < 0.0001)[0][-1]]
+
+    return roc_auc, acc, one_percent, tenth_percent, hundredth_percent
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -74,9 +136,11 @@ if __name__ == "__main__":
     )
 
     # Load the parameters
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
     with open(args.cf, "rb") as f:
         configs = yaml.load(f, Loader=yaml.Loader)
+
+    configs = parse_extra(parser, configs) # parsing more stuff
 
     check_configs(configs)
     # Set the random seed, log_dir and inference_game
@@ -86,13 +150,13 @@ if __name__ == "__main__":
     log_dir = configs["run"]["log_dir"]
     inference_game_type = configs["audit"]["privacy_game"].upper()
 
-    # Set up the logger
-    logger = setup_log("time_analysis", configs["run"]["time_log"])
-
     # Create folders for saving the logs if they do not exist
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     report_dir = f"{log_dir}/{configs['audit']['report_log']}"
     Path(report_dir).mkdir(parents=True, exist_ok=True)
+
+    # Set up the logger
+    logger = setup_log(report_dir, "time_analysis", configs["run"]["time_log"])
 
     start_time = time.time()
 
@@ -216,6 +280,18 @@ if __name__ == "__main__":
 
         # Generate the privacy risk report
         print(25 * ">" + "Generating privacy risk report")
+
+
+        roc_auc, acc, one_percent, tenth_percent, hundredth_percent = metric_results(audit_results[0][0].fpr, audit_results[0][0].tpr)
+
+        logger.info(
+            "AUC %.4f, Accuracy %.4f" % (roc_auc, acc)
+        )
+        logger.info(
+            "TPR@1%%FPR of %.4f, TPR@0.1%%FPR of %.4f, TPR@0.01%%FPR of %.4f" % (
+            one_percent, tenth_percent, hundredth_percent)
+        )
+
         baseline_time = time.time()
         prepare_priavcy_risk_report(
             log_dir,
@@ -373,20 +449,27 @@ if __name__ == "__main__":
         # The following code is modified from the original code in the repo: https://github.com/tensorflow/privacy/tree/master/research/mi_lira_2021
         baseline_time = time.time()
         p_ratio = configs["data"]["keep_ratio"]
-        dataset_size = configs["data"]["dataset_size"]
-        data_split_info, keep_matrix = prepare_datasets_for_online_attack(
-            dataset_size,
+        dataset_size = len(dataset)
+        # training_size = configs["data"]["dataset_size"]
+        data_split_info, keep_matrix = prepare_datasets_for_online_attack_overlap(
+            dataset_size=dataset_size,
             num_models=(
                 configs["train"]["num_in_models"]
                 + configs["train"]["num_out_models"]
                 + configs["train"]["num_target_model"]
             ),
-            keep_ratio=p_ratio,
-            is_uniform=False,
+            configs=configs["data"]
         )
+
+        ## Points from which we compute the actual signal
+        target_and_test_idx = np.array(list(data_split_info["split"][0]["target"]) + list(data_split_info["split"][0]["test"]))
+        print(target_and_test_idx.shape, data_split_info["split"][0]["target"].shape, data_split_info["split"][0]["test"].shape)
         data, targets = get_dataset_subset(
-            dataset, np.arange(dataset_size), configs["train"]["model_name"]
-        )  # only the train dataset we want to attack
+            dataset, target_and_test_idx, configs["train"]["model_name"]
+        )
+        print(len(data), len(targets))
+
+
         logger.info(
             "Prepare the datasets costs %0.5f seconds",
             time.time() - baseline_time,
@@ -395,7 +478,7 @@ if __name__ == "__main__":
         if model_metadata_list["current_idx"] == 0:
             (model_list, model_metadata_dict, trained_model_idx_list) = prepare_models(
                 log_dir,
-                dataset,
+                dataset, # we train on this...
                 data_split_info,
                 configs["train"],
                 model_metadata_list,
@@ -416,7 +499,7 @@ if __name__ == "__main__":
                 signals.append(
                     get_signal_on_argumented_data(
                         model_pm,
-                        data,
+                        data, # but we query a smaller dataset..
                         targets,
                         method=configs["audit"]["argumentation"],
                     )
@@ -428,7 +511,8 @@ if __name__ == "__main__":
         else:
             baseline_time = time.time()
             signals = []
-            for idx in range(model_metadata_list["current_idx"]):
+            number_of_models_lira = configs["train"]["num_in_models"] + configs["train"]["num_out_models"] + configs["train"]["num_target_model"]
+            for idx in range(number_of_models_lira): # we consider that we train lira online setting first.
                 print("load the model and compute signals for model %d" % idx)
                 model_pm = PytorchModelTensor(
                     model_obj=load_existing_models(
@@ -455,21 +539,38 @@ if __name__ == "__main__":
             )
         baseline_time = time.time()
         signals = np.array(signals)
-        target_signal = signals[-1:, :]
-        reference_signals = signals[:-1, :]
-        reference_keep_matrix = keep_matrix[:-1, :]
-        membership = keep_matrix[-1:, :]
+
+        # target_signal = signals[-1:, :]  # LAST MODEL IS TARGET
+        # reference_signals = signals[:-1, :]
+        # reference_keep_matrix = keep_matrix[:-1, :]
+        # membership = keep_matrix[-1:, :]
+
+
+        target_signal = signals[-1:, :] # LAST MODEL IS TARGET # shape 1 x N + M
+        reference_signals = signals[:-1, :] # shape nb_models x N + M
+        reference_keep_matrix = keep_matrix[:-1, target_and_test_idx] # shape nb_models x N + M
+        membership = keep_matrix[-1:, target_and_test_idx] # shape 1 x N + M
+
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/lira_target_signal", target_signal)
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/lira_target_keep", membership)
+
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/lira_reference_signal", reference_signals)
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/lira_reference_keep", reference_keep_matrix)
+
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/lira_target_samples", data_split_info["split"][0]["target"])
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/lira_test_samples",data_split_info["split"][0]["test"])
 
         in_signals = []
         out_signals = []
+        number_target = len(data_split_info["split"][0]["target"])
 
-        for data_idx in range(dataset_size):
+        for data_idx in range(number_target):
             in_signals.append(
                 reference_signals[reference_keep_matrix[:, data_idx], data_idx]
-            )
+            ) # selects the models that have data_idx as train
             out_signals.append(
                 reference_signals[~reference_keep_matrix[:, data_idx], data_idx]
-            )
+            ) # selects the models that don't have data_idx as train
 
         in_size = min(min(map(len, in_signals)), configs["train"]["num_in_models"])
         out_size = min(min(map(len, out_signals)), configs["train"]["num_out_models"])
@@ -486,10 +587,13 @@ if __name__ == "__main__":
             std_in = np.std(in_signals, 1)
             std_out = np.std(out_signals, 1)
 
+
         prediction = []
         answers = []
-        for ans, sc in zip(membership, target_signal):
-            if configs["audit"]["offline"]:
+        print(membership.shape, target_signal.shape, mean_in.shape, mean_out.shape)
+        for ans, sc in zip(membership[:,:number_target], target_signal[:,:number_target]):
+            print(ans, sc)
+            if str2bool(configs["audit"]["offline"]):
                 pr_in = 0
             else:
                 pr_in = -norm.logpdf(sc, mean_in, std_in + 1e-30)
@@ -511,8 +615,16 @@ if __name__ == "__main__":
             "Prepare the privacy risks results costs %0.5f seconds",
             time.time() - baseline_time,
         )
-        low = tpr_list[np.where(fpr_list < 0.001)[0][-1]]
-        print("AUC %.4f, Accuracy %.4f, TPR@0.1%%FPR of %.4f" % (roc_auc, acc, low))
+        one_percent = tpr_list[np.where(fpr_list < 0.01)[0][-1]]
+        tenth_percent = tpr_list[np.where(fpr_list < 0.001)[0][-1]]
+        hundredth_percent = tpr_list[np.where(fpr_list < 0.0001)[0][-1]]
+
+        logger.info(
+            "AUC %.4f, Accuracy %.4f" % (roc_auc, acc)
+        )
+        logger.info(
+            "TPR@1%%FPR of %.4f, TPR@0.1%%FPR of %.4f, TPR@0.01%%FPR of %.4f" % (one_percent, tenth_percent, hundredth_percent)
+        )
         plot_roc(
             fpr_list,
             tpr_list,

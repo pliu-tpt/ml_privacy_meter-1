@@ -120,8 +120,11 @@ class CombinedMetricResult:
             predicted_labels[:, true_labels == 1], axis=1
         )
 
+        self.fpr = self.fp / (np.sum(true_labels == 0))
+        self.tpr = self.tp / (np.sum(true_labels == 1))
+
         self.roc_auc = auc(
-            self.fp / (np.sum(true_labels == 0)), self.tp / (np.sum(true_labels == 1))
+            self.fpr , self.tpr
         )
 
     def __str__(self):

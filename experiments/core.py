@@ -156,7 +156,7 @@ def load_existing_models(
     # dataset_list=None,
     dataset=None,
 ):
-    """Load existing models from dicks for matched_idx.
+    """Load existing models from dicts for matched_idx.
 
     Args:
         model_metadata_dict (dict): Model metedata dict.
@@ -210,7 +210,16 @@ def load_dataset_for_existing_models(
     for metadata_idx in matched_idx:
         metadata = model_metadata_dict["model_metadata"][metadata_idx]
         # Check if the existing target data has the test split.
-        if "test_split" in metadata:
+        if "target_split" in metadata:
+            index_list.append(
+                {
+                    "train": metadata["train_split"],
+                    "test": metadata["test_split"],
+                    "audit": metadata["audit_split"],
+                    "target": metadata["target_split"],
+                }
+            )
+        elif "test_split" in metadata:
             index_list.append(
                 {
                     "train": metadata["train_split"],
@@ -440,6 +449,97 @@ def prepare_datasets_for_online_attack(
     return dataset_splits, keep
 
 
+
+def prepare_datasets_for_online_attack_overlap(
+    dataset_size: int,
+    num_models: int,
+    configs: dict,
+):
+    """Modified partioning method from https://github.com/tensorflow/privacy/blob/master/research/mi_lira_2021/train.py
+    Here we control the overlap for a certain number of points for the IN models.
+
+    Args:
+        dataset_size (int): Size of the whole dataset
+        num_models (int): Number of reference models
+        num_target_models (int): Number of target models
+        configs (dict): A Dict containing:
+            f_train (float or int): Number of training samples per model
+            f_test (float or int): Number of test samples across all models
+            f_target (float or int): Number of train samples that will appear keep_ratio x num_models times in the training
+            keep_ratio (float): Indicate the fraction of models that WILL have the target points for training the IN models.
+    Returns:
+        dict: Data split information.
+        list: List of boolean indicating whether the model is trained on the target point.
+    """
+    # TODO make this work
+    all_index = np.arange(dataset_size)
+    train_size = convert_f_to_int(configs["f_train"], dataset_size)
+    test_size = convert_f_to_int(configs["f_test"], dataset_size)
+    audit_size = convert_f_to_int(configs["f_audit"], dataset_size)
+    target_points_size = convert_f_to_int(configs["f_target"], dataset_size)
+    keep_ratio = configs["keep_ratio"]
+
+    # Step 1: separate into permissible train and test
+    pop_pool_index, test_index = train_test_split(all_index, test_size=test_size)
+    # Step 2: separate the pool into points that are CERTAIN to appear and the rest
+    target_points_index = get_split(
+            all_index,
+            used_index=test_index,
+            size=target_points_size,
+            split_method="no_overlapping",
+        )
+    rest_points_index = np.setdiff1d(pop_pool_index, target_points_index, assume_unique=True)
+
+    # Step 2bis: select some independent audit points for attacks other than lira, with NO overlap with the rest
+    rest_points_index, audit_index = train_test_split(rest_points_index, test_size=audit_size)
+
+    # Step 3: select which keep_ratio of models will train on which CERTAIN points
+    selected_matrix = np.random.uniform(0, 1, size=(num_models, target_points_size))
+    # This matrix num_models x nb_target_points, with each column a random order
+    order = selected_matrix.argsort(0)
+    # This matrix gives for each column if a target point is kept for each model's training set or not
+    sub_keep = order < int(keep_ratio * num_models)
+
+    # Step 4: create the final matrix of membership
+    keep = np.full((num_models, dataset_size), False, dtype=bool)
+    # Fill with the membership of each target point that are certain to appear
+    keep[:, target_points_index] = sub_keep
+
+    # Step 5: complete the final matrix of membership so that each model has exactly train_size points
+    index_list = []
+
+    for i in range(num_models):
+        nb_certain_samples = np.sum(keep[i]) # nb of samples already selected previously
+        rest_index = np.random.choice(rest_points_index, size=train_size-nb_certain_samples, replace=False)
+
+        keep[i][rest_index] = True
+
+        train_index = all_index[keep[i]]
+        index_list.append(
+            {
+                "train": train_index, # training points of model i
+                "test": test_index, # Test points
+                "audit": audit_index, # this index is solely for other attacks: reference, population, etc.
+                "target": target_points_index
+            }
+        )
+
+    # Step 6.1: Make sure that the test aand audit are indeed in NO ones training set
+    if (keep[:, test_index] == True).sum() != 0:
+        raise Exception("The Test set overlaps with a training set.")
+
+    if (keep[:, audit_index] == True).sum() != 0:
+        raise Exception("The Audit set overlaps with a training set.")
+
+    # Step 6.2: Make sure that each CERTAIN target is in test is indeed in half of the model's train set
+    for sample_idx in target_points_index:
+        if sum(keep[:, sample_idx]) % 2 != 0:
+            raise Exception("A sample is not in half of the model's dataset...")
+
+    dataset_splits = {"split": index_list, "split_method": f"random_{keep_ratio}"}
+    return dataset_splits, keep
+
+
 def prepare_models(
     log_dir: str,
     dataset: torchvision.datasets,
@@ -497,7 +597,7 @@ def prepare_models(
             print(f"Train accuracy {train_acc}, Train Loss {train_loss}")
             print(f"Test accuracy {test_acc}, Test Loss {test_loss}")
 
-        else:
+        else: # speedyresnet
             data = get_cifar10_data(
                 dataset,
                 data_split["split"][split]["train"],
@@ -530,6 +630,7 @@ def prepare_models(
         meta_data["test_split"] = data_split["split"][split]["test"]
         meta_data["audit_split"] = data_split["split"][split]["audit"]
         meta_data["num_train"] = len(data_split["split"][split]["train"])
+        meta_data["target_split"] = data_split["split"][split]["target"] # Adding target
         meta_data["optimizer"] = configs["optimizer"]
         meta_data["batch_size"] = configs["batch_size"]
         meta_data["epochs"] = configs["epochs"]
@@ -553,7 +654,7 @@ def prepare_models(
 
 def get_info_source_population_attack(
     dataset: torchvision.datasets,
-    data_split: dict,
+    data_split: dict,# TODO: use the target set to evaluate membership attacks (edit train and test)
     model: nn.Module,
     configs: dict,
     model_name: str,
@@ -572,23 +673,51 @@ def get_info_source_population_attack(
         List(nn.Module): List of target models we want to audit
         List(nn.Module): List of reference models (which is the target model based on population attack)
     """
-    train_data, train_targets = get_dataset_subset(
-        dataset, data_split["train"], model_name
-    )
-    test_data, test_targets = get_dataset_subset(
-        dataset, data_split["test"], model_name
-    )
+
     audit_data, audit_targets = get_dataset_subset(
         dataset, data_split["audit"], model_name
     )
-    target_dataset = Dataset(
-        data_dict={
-            "train": {"x": train_data, "y": train_targets},
-            "test": {"x": test_data, "y": test_targets},
-        },
-        default_input="x",
-        default_output="y",
-    )
+    print("YAYAYAYAYA",data_split)
+
+    if "target" in data_split.keys():
+        target_and_train_index = list(set(data_split["train"]) & set(data_split["target"]))
+        target_and_test_index = np.setdiff1d(data_split["target"], target_and_train_index, assume_unique=True)
+
+        train_data, train_targets = get_dataset_subset(
+            dataset, target_and_train_index, model_name
+        )
+        test_data, test_targets = get_dataset_subset(
+            dataset, target_and_test_index, model_name
+        )
+
+        # We want to split this target set into train and test
+
+        target_dataset = Dataset(
+            data_dict={
+                "train": {"x": train_data, "y": train_targets},
+                "test": {"x": test_data, "y": test_targets},
+            },
+            default_input="x",
+            default_output="y",
+        )
+        print("YEEEEEEEEEES")
+    else:
+        print("NOPE")
+        train_data, train_targets = get_dataset_subset(
+            dataset, data_split["train"], model_name
+        )
+        test_data, test_targets = get_dataset_subset(
+            dataset, data_split["test"], model_name
+        )
+
+        target_dataset = Dataset(
+            data_dict={
+                "train": {"x": train_data, "y": train_targets},
+                "test": {"x": test_data, "y": test_targets},
+            },
+            default_input="x",
+            default_output="y",
+        )
 
     audit_dataset = Dataset(
         data_dict={"train": {"x": audit_data, "y": audit_targets}},
@@ -607,7 +736,7 @@ def get_info_source_population_attack(
 def get_info_source_reference_attack(
     log_dir: str,
     dataset: torchvision.datasets,
-    data_split: dict,
+    data_split: dict, # TODO: use the target set to evaluate membership attacks (edit train and test)
     model: nn.Module,
     configs: dict,
     model_metadata_dict: dict,
@@ -637,20 +766,44 @@ def get_info_source_reference_attack(
 
     # Construct the target dataset and target models
 
-    train_data, train_targets = get_dataset_subset(
-        dataset, data_split["train"], model_name
-    )
-    test_data, test_targets = get_dataset_subset(
-        dataset, data_split["test"], model_name
-    )
-    target_dataset = Dataset(
-        data_dict={
-            "train": {"x": train_data, "y": train_targets},
-            "test": {"x": test_data, "y": test_targets},
-        },
-        default_input="x",
-        default_output="y",
-    )
+    if "target" in data_split.keys():
+        target_and_train_index = list(set(data_split["train"]) & set(data_split["target"]))
+        target_and_test_index = np.setdiff1d(data_split["target"], target_and_train_index, assume_unique=True)
+
+        train_data, train_targets = get_dataset_subset(
+            dataset, target_and_train_index, model_name
+        )
+        test_data, test_targets = get_dataset_subset(
+            dataset, target_and_test_index, model_name
+        )
+
+        # We want to split this target set into train and test
+
+        target_dataset = Dataset(
+            data_dict={
+                "train": {"x": train_data, "y": train_targets},
+                "test": {"x": test_data, "y": test_targets},
+            },
+            default_input="x",
+            default_output="y",
+        )
+    else:
+
+        train_data, train_targets = get_dataset_subset(
+            dataset, data_split["train"], model_name
+        )
+        test_data, test_targets = get_dataset_subset(
+            dataset, data_split["test"], model_name
+        )
+
+        target_dataset = Dataset(
+            data_dict={
+                "train": {"x": train_data, "y": train_targets},
+                "test": {"x": test_data, "y": test_targets},
+            },
+            default_input="x",
+            default_output="y",
+        )
     target_model = PytorchModelTensor(
         model_obj=model,
         loss_fn=nn.CrossEntropyLoss(),
@@ -661,14 +814,20 @@ def get_info_source_reference_attack(
     reference_idx = load_existing_reference_models(
         model_metadata_dict, configs, target_model_idx
     )
+    print("Existing reference models: ",reference_idx)
 
     reference_idx = check_reference_model_dataset(
         model_metadata_dict, reference_idx, target_model_idx, configs["split_method"]
     )
     print(f"Load existing {len(reference_idx)} reference models")
-    existing_reference_models = load_existing_models(
-        model_metadata_dict, reference_idx, configs["model_name"]
+    if "target" in data_split.keys():
+        existing_reference_models = load_existing_models(
+        model_metadata_dict, reference_idx, configs["model_name"], dataset=dataset
     )
+    else:
+        existing_reference_models = load_existing_models(
+            model_metadata_dict, reference_idx, configs["model_name"]
+        )
     reference_models = [
         PytorchModelTensor(
             model_obj=model,
@@ -685,7 +844,7 @@ def get_info_source_reference_attack(
         reference_data_idx = get_split(
             data_split["audit"],
             None,
-            size=int(configs["f_reference_dataset"] * len(train_data)),
+            size=int(configs["f_reference_dataset"] * len(data_split["train"])),
             split_method=configs["split_method"],
         )
 

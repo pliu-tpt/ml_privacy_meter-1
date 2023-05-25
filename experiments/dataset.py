@@ -64,7 +64,33 @@ def get_dataset(dataset_name: str, data_dir: str):
         print(f"Load data from {path}.pkl")
 
     else:
-        if dataset_name == "cifar10":
+        if dataset_name == "cifar5m":
+            transform = transforms.Compose([transforms.ToTensor()])
+            all_data = torchvision.datasets.CIFAR100(
+                root=path, train=False, download=True, transform=transform
+            )
+            print(all_data.data[0, 0, 0])
+            for i in range(6): # can be modified for less data
+                part_dir = f"{data_dir}/{dataset_name}/{dataset_name}_part{i}.npz"
+                if os.path.exists(part_dir):
+                    print(f"Loading Part {i}")
+                    data = np.load(part_dir)
+                    x, y = data["X"], data["Y"]
+                    if i == 0:
+                        all_data.data = x
+                        all_data.targets = y
+                    else:
+                        all_features = np.concatenate(
+                            [all_data.data, x], axis=0)
+                        all_targets = np.concatenate(
+                            [all_data.targets, y], axis=0)
+                        all_data.data = all_features
+                        all_data.targets = all_targets
+            with open(f"{path}.pkl", "wb") as file:
+                pickle.dump(all_data, file)
+            print(f"Save data to {path}.pkl")
+
+        elif dataset_name == "cifar10":
             transform = transforms.Compose(
                 [
                     transforms.ToTensor(),
@@ -115,16 +141,15 @@ def get_dataset_subset(
         input_list = []
         targets_list = []
 
-        MAX_BATCH_SIZE = 5000 # to avoid OOM
+        MAX_BATCH_SIZE = 5000
         size = len(index)
-        list_divisors = list(set(
-            factor for i in range(1, int(math.sqrt(size)) + 1) if size % i == 0 for factor in (i, size // i) if
-            factor < MAX_BATCH_SIZE))
+        list_divisors = list(set(factor for i in range(1, int(math.sqrt(size)) + 1) if size % i == 0 for factor in (i, size // i) if factor < MAX_BATCH_SIZE))
         batch_size = max(list_divisors)
+        print("Batch size for evaluation: ",batch_size)
 
         for inputs, targets in get_batches(
-                data, key="eval", batchsize=batch_size, shuffle=False
-        ):
+            data, key="eval", batchsize=batch_size, shuffle=False
+        ): # TODO the batch size HAS to divide the total size of index, correct hard coded bs param
             input_list.append(inputs)
             targets_list.append(targets)
         inputs = torch.cat(input_list, dim=0)
