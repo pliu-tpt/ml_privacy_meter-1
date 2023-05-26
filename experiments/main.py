@@ -515,13 +515,25 @@ if __name__ == "__main__":
         dataset_size = len(dataset)
         # training_size = configs["data"]["dataset_size"]
         number_of_models_lira = configs["train"]["num_in_models"] + configs["train"]["num_out_models"] + configs["train"]["num_target_model"]
-        data_split_info, keep_matrix = prepare_datasets_for_online_attack_overlap(
-            dataset_size=dataset_size,
-            num_models=(
-                number_of_models_lira
-            ),
-            configs=configs["data"]
-        )
+
+        data_split_info_path = f"{log_dir}/data_split_info.pkl"
+        keep_matrix_path = f"{log_dir}/keep_matrix.npy"
+
+        if os.path.isfile(data_split_info_path):
+            with open(data_split_info_path, "rb") as f:
+                data_split_info = pickle.load(f)
+            keep_matrix = np.load(keep_matrix_path, allow_pickle=True)
+        else:
+            data_split_info, keep_matrix = prepare_datasets_for_online_attack_overlap(
+                dataset_size=dataset_size,
+                num_models=(
+                    number_of_models_lira
+                ),
+                configs=configs["data"]
+            )
+            with open(data_split_info_path, "wb") as f:
+                pickle.dump(data_split_info, f)
+            np.save(keep_matrix_path, keep_matrix)
 
         ## Points from which we compute the actual signal
         target_and_test_idx = np.array(list(data_split_info["split"][0]["target"]) + list(data_split_info["split"][0]["test"]))

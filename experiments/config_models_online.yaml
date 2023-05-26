@@ -15,7 +15,7 @@ audit: # Configurations for auditing
 train: # Configuration for training
   type: pytorch # Training framework (we only support pytorch now).
   epochs: 20 #100 # Integer number for indicating the epochs for training target model.
-  batch_size: 256 # Integer number for indicating batch size for training the target model.
+  batch_size: 128 # Integer number for indicating batch size for training the target model.
   test_batch_size: 10000 # Integer number for indicating batch size for evaluating the target model.
   optimizer: AdamW # String which indicates the optimizer. We support Adam and SGD.
   learning_rate: 0.1 # Float number for indicating learning rate for training the target model.
@@ -31,4 +31,4 @@ data: # Configuration for data
   dataset: cifar10 # String indicates the name of the dataset
   data_dir: ../data
   keep_ratio: 0.5 # the ratio of keeping the point for the training dataset.
-  dataset_size: 50000 # the size of the whole dataset used.
+  dataset_size: 60000 # the size of the whole dataset used.

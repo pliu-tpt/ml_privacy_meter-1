@@ -4,6 +4,8 @@ from copy import deepcopy
 import numpy as np
 import tensorflow as tf
 import torch
+import math
+from tqdm import tqdm
 from opacus import GradSampleModule  # For speeding up the gradient computation
 from scipy.special import softmax
 
@@ -727,6 +729,95 @@ class PytorchModelTensor(Model):
             all_rescaled_logits = np.concatenate(rescaled_list)
         self.model_obj.to("cpu")
         return all_rescaled_logits
+    
+    def _get_random_directions(self, one_sample, nb_directions:int, radius:float, is_first_original:bool):
+        """Private Helper Function that computes deterministically nb_directions directions with norm less than 1.
+        The radius corresponds to the number of steps taken towards max_norm.
+
+        Args:
+            batch_samples: Model input to attack.
+            batch_labels: Model expected output.
+            eps: Maximum infinite-norm allowed for the perturbation
+            alpha: PGD step size
+            iters: Number of iterations for the PGD attack.
+            nb_perturbed: Number of noisy copies around each input to attack
+            noise_range: Range/std of the initial perturbation applied to a sample
+
+        Returns:
+            recorded_losses: Recorded losses during the PGD attack for each input to attack. Shape len(batch_samples) x nb_perturbed x iters
+                Each row represents nb_perturbed noisy copies of an input sample's loss trajectory (of size iters)
+        """
+        torch.manual_seed(0)
+        max_norm = math.sqrt(3*32*32) * 0.1
+        print("MAX NORM",max_norm, float(radius))
+        multiplier = float(radius) * max_norm
+        print("MULTIPLIER",multiplier)
+        if is_first_original:
+            random_directions = [torch.randn_like(one_sample) if k != 0 else torch.zeros_like(one_sample) for k in range(nb_directions + 1) ]
+            random_directions = torch.stack([multiplier*ele/torch.norm(ele) if i!=0 else torch.zeros_like(one_sample) for (i, ele) in enumerate(random_directions)]).to(self.device) # shape nb_perturbed x image.shape
+        else:
+            random_directions = [torch.randn_like(one_sample) for k in range(nb_directions) ]
+            random_directions = torch.stack([multiplier*ele/torch.norm(ele) for ele in random_directions]).to(self.device) # shape nb_perturbed x image.shape
+        return random_directions
+
+    def get_single_pgd_percentile(self, batch_samples, batch_labels, noise_range, random_directions=None, just_norm=None):
+        """Function that computes for each sample the proportion of perturbations of it that has a
+        lower l2 PGD-step norm than the unperturbed point.
+
+        Args:
+            batch_samples: Model input to attack.
+            batch_labels: Model expected output.
+            noise_range: Range/std of the initial perturbation applied to a sample.
+            random_direction: list of directions from which we compute the perturbed signals
+
+        Returns:
+            recorded_losses: Recorded losses during the PGD attack for each input to attack. Shape len(batch_samples) x nb_perturbed x iters
+                Each row represents nb_perturbed noisy copies of an input sample's loss trajectory (of size iters)
+        """
+
+        self.model_obj.to(self.device)
+
+        batched_samples = torch.split(batch_samples, self.batch_size)
+        batched_labels = torch.split(batch_labels, self.batch_size)
+
+        nb_perturbed = 1000
+        random_directions = self._get_random_directions(batch_samples[0], nb_perturbed, noise_range, is_first_original=True)
+
+        gradnorm_list = []
+
+        for x, y in tqdm(zip(batched_samples, batched_labels)):
+
+            images = torch.repeat_interleave(x, nb_perturbed+1, dim=0).to(self.device) # shape batch_samples * nb_perturbed x image.shape
+            labels = torch.repeat_interleave(y, nb_perturbed+1, dim=0).to(self.device)
+
+            new_shape = np.ones_like(list(x.shape)) # e.g. (len(x),1,1,1)
+            new_shape[0] = len(x)
+            noisy_image = (images + random_directions.repeat(*new_shape)).to(self.device)  # normal distribution noise
+            noisy_image, labels = noisy_image.to(self.device), labels.to(self.device)
+
+            noisy_image.requires_grad = True
+            outputs = self.model_obj(noisy_image)
+
+            self.model_obj.zero_grad()
+            per_sample = self.loss_fn_no_reduction(outputs, labels).to(self.device)
+            cost = torch.mean(per_sample).to(self.device)
+
+            cost.backward()
+            batch_norms = torch.norm(noisy_image.grad, p=2, dim=(1,2,3))
+
+            gradnorm_list.append(batch_norms)
+            print(batch_norms[0])
+
+        all_gradnorms = torch.cat(gradnorm_list).cpu().detach().numpy()
+        all_gradnorms = all_gradnorms.reshape(len(batch_samples),nb_perturbed+1)
+
+        original_gradnorms = all_gradnorms[:,0].reshape(len(batch_samples),1) # original PGD steps
+
+        if just_norm:
+            return original_gradnorms
+        
+        counts = (original_gradnorms > all_gradnorms).sum(1) / nb_perturbed
+        return counts 
 
 
 class Sklearn_Model(Model):

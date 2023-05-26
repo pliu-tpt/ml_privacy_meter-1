@@ -31,6 +31,10 @@ from privacy_meter.dataset import Dataset
 from privacy_meter.information_source import InformationSource
 from privacy_meter.model import PytorchModelTensor
 
+from privacy_meter.metric import PopulationMetric
+from privacy_meter.information_source_signal import ModelSingleStepPGD
+from privacy_meter.hypothesis_test import linear_itp_threshold_func
+
 
 def load_existing_target_model(
     dataset_size: int, model_metadata_dict: dict, configs: dict
@@ -124,7 +128,11 @@ def check_reference_model_dataset(
         List (int): List of reference model index which matches the splitting method.
     """
     meta_data_dict = model_metadata_dict["model_metadata"]
-    target_train_split = meta_data_dict[target_idx]["train_split"]
+    if "target_split" in meta_data_dict[target_idx].keys():
+        target_train_split = list(set(meta_data_dict[target_idx]["target_split"]) & set(meta_data_dict[target_idx]["train_split"]))
+        print("TARGET SPLIT DETECTED, REF MODELS ARE RESP. OF TARGET AND REF TRAIN")
+    else:
+        target_train_split = meta_data_dict[target_idx]["train_split"]
     if splitting_method == "no_overlapping":
         return [
             idx
@@ -681,7 +689,6 @@ def get_info_source_population_attack(
     audit_data, audit_targets = get_dataset_subset(
         dataset, data_split["audit"], model_name
     )
-    print("YAYAYAYAYA",data_split)
 
     if "target" in data_split.keys():
         target_and_train_index = list(set(data_split["train"]) & set(data_split["target"]))
@@ -698,15 +705,13 @@ def get_info_source_population_attack(
 
         target_dataset = Dataset(
             data_dict={
-                "train": {"x": train_data, "y": train_targets},
-                "test": {"x": test_data, "y": test_targets},
+                "train": {"x": train_data, "y": train_targets, "index": target_and_train_index},
+                "test": {"x": test_data, "y": test_targets, "index": target_and_test_index},
             },
             default_input="x",
             default_output="y",
         )
-        print("YEEEEEEEEEES")
     else:
-        print("NOPE")
         train_data, train_targets = get_dataset_subset(
             dataset, data_split["train"], model_name
         )
@@ -716,15 +721,15 @@ def get_info_source_population_attack(
 
         target_dataset = Dataset(
             data_dict={
-                "train": {"x": train_data, "y": train_targets},
-                "test": {"x": test_data, "y": test_targets},
+                "train": {"x": train_data, "y": train_targets, "index": data_split["train"]},
+                "test": {"x": test_data, "y": test_targets, "index": data_split["test"]},
             },
             default_input="x",
             default_output="y",
         )
 
     audit_dataset = Dataset(
-        data_dict={"train": {"x": audit_data, "y": audit_targets}},
+        data_dict={"train": {"x": audit_data, "y": audit_targets, "index": data_split["audit"]}},
         default_input="x",
         default_output="y",
     )
@@ -785,8 +790,8 @@ def get_info_source_reference_attack(
 
         target_dataset = Dataset(
             data_dict={
-                "train": {"x": train_data, "y": train_targets},
-                "test": {"x": test_data, "y": test_targets},
+                "train": {"x": train_data, "y": train_targets, "index": target_and_train_index},
+                "test": {"x": test_data, "y": test_targets, "index": target_and_test_index},
             },
             default_input="x",
             default_output="y",
@@ -802,8 +807,8 @@ def get_info_source_reference_attack(
 
         target_dataset = Dataset(
             data_dict={
-                "train": {"x": train_data, "y": train_targets},
-                "test": {"x": test_data, "y": test_targets},
+                "train": {"x": train_data, "y": train_targets, "index": data_split["train"]},
+                "test": {"x": test_data, "y": test_targets, "index": data_split["test"]},
             },
             default_input="x",
             default_output="y",
@@ -989,6 +994,42 @@ def prepare_information_source(
                 model_name,
             )
             metrics = MetricEnum.REFERENCE
+        
+        elif configs["algorithm"] == "population_pgd":
+            # Check if there are existing reference models
+            (
+                target_dataset,
+                audit_dataset,
+                target_model,
+                audit_models,
+                model_metadata_dict,
+            ) = get_info_source_reference_attack(
+                log_dir,
+                dataset,
+                data_split["split"][split],
+                model_list[split],
+                configs,
+                model_metadata_dict,
+                target_model_idx_list[split],
+                model_name,
+            )
+            target_info_source = InformationSource(
+            models=target_model, datasets=target_dataset
+            )
+            reference_info_source = InformationSource(
+            models=audit_models, datasets=audit_dataset
+            )
+            metrics = PopulationMetric(
+                        target_info_source=target_info_source,
+                        reference_info_source=reference_info_source,
+                        signals=[ModelSingleStepPGD()],  # TODO customize this too ? Used to be ModelLoss()
+                        hypothesis_test_func=linear_itp_threshold_func,
+                        logs_dirname=f"{log_dir}/{configs['report_log']}/signal_{split}",
+                        extra=configs["pgd"]
+            )
+                    
+            ## TODO metrics = MetricEnum.REFERENCE initialize clean metric here
+
         metric_list.append(metrics)
 
         target_info_source = InformationSource(
