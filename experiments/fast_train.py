@@ -152,7 +152,7 @@ def get_cifar10_data(dataset, train_index, test_index, device):
     data["train"]["targets"] = F.one_hot(data["train"]["targets"]).half()
     data["eval"]["targets"] = F.one_hot(data["eval"]["targets"]).half()
 
-    if hyp["net"]["pad_amount"] > 0:
+    if hyp["net"]["pad_amount"] > 0: # Note: if F.pad doesn't work with half(), it means it's on the cpu (only works with cuda)
         data["train"]["images"] = F.pad(
             data["train"]["images"], (hyp["net"]["pad_amount"],) * 4, "reflect"
         )
@@ -495,7 +495,7 @@ def make_random_square_masks(inputs, mask_size):
     return final_mask
 
 
-def batch_cutmix(inputs, targets, patch_size, device):
+def batch_cutmix(inputs, targets, patch_size, device="cuda"):
     with torch.no_grad():
         batch_permuted = torch.randperm(inputs.shape[0], device=device)
         cutmix_batch_mask = make_random_square_masks(inputs, patch_size)
@@ -566,7 +566,7 @@ class NetworkEMA(nn.Module):
 
 # TODO: Could we jit this in the (more distant) future? :)
 @torch.no_grad()
-def get_batches(data_dict, key, batchsize, device, epoch_fraction=1., cutmix_size=None, shuffle=True):
+def get_batches(data_dict, key, batchsize, epoch_fraction=1., cutmix_size=None, shuffle=True, device="cuda"):
     num_epoch_examples = len(data_dict[key]['images'])
     if shuffle:
         shuffled = torch.randperm(num_epoch_examples, device=device)
@@ -832,7 +832,7 @@ def fast_train_fun(data, net, device, hyp=hyp, batchsize=batchsize, eval_batchsi
 
             with torch.no_grad():
                 for inputs, targets in get_batches(
-                    data, key="eval", device=device, batchsize=eval_batchsize
+                    data, key="eval", batchsize=eval_batchsize, device=device
                 ):
                     if epoch >= ema_epoch_start:
                         outputs = net_ema(inputs)
@@ -892,7 +892,7 @@ def fast_train_fun(data, net, device, hyp=hyp, batchsize=batchsize, eval_batchsi
         eva_data = get_cifar10_data(dataset, train_index[:1], np.concatenate([train_index, test_index]))
         with torch.no_grad():
             for inputs, targets in get_batches(
-                eva_data, key="eval", device=device, batchsize=2500
+                eva_data, key="eval", batchsize=2500, device=device
             ):
                 outputs = net_ema(inputs)
                 loss_list_all.append(loss_fn(outputs, targets).float())

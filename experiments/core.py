@@ -155,7 +155,7 @@ def load_existing_models(
     model_name: str,
     # dataset_list=None,
     dataset=None,
-    device="cpu"
+    device="cuda"
 ):
     """Load existing models from dicts for matched_idx.
 
@@ -179,6 +179,7 @@ def load_existing_models(
                     dataset,
                     [0],
                     [0],
+                    device=device
                 )
                 model = NetworkEMA(make_net(data, device=device))
             with open(f"{metadata['model_path']}", "rb") as file:

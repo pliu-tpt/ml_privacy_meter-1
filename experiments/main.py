@@ -116,6 +116,69 @@ def parse_extra(parser, configs):
                             configs[key][subkey][subsubkey] = args.__dict__.get(subsubkey)
     return configs
 
+
+def collect_signal(model, model_index, dataset, dataset_indeces, log_dir, signal_name, config):
+    """
+    Function that queries a given model on a given dataset on specific indeces for a given signal name
+
+    Args:
+        model (lamnda: Model): lambda function that will init the model eventually.
+        model_index (int): model index in the log_dir
+        dataset (torchvision.datasets): dataset to query
+        dataset_indeces (List[int]) : which indices to query
+        log_dir (str): log_dir 
+        signal_name (str): signal's name, usually of the form '{primary_signal}_{post_processing}'
+        config (dict): eventual other parameters relative to the signal
+    Returns:
+        signals: the computed or loaded signals
+    """
+    def create_or_load_signal_file(path,dataset):
+        if not os.path.isfile(path):
+            signal_storage = np.full((len(dataset)), np.nan)
+            np.save(path, signal_storage)
+        else:
+            signal_storage = np.load(path, allow_pickle=True)
+        return signal_storage
+
+    # Create a directory will all the primary signals per model 
+    if not os.path.exists(f"{log_dir}/meta_signal/"):
+        os.makedirs(f"{log_dir}/meta_signal/")
+
+    if signal_name == "loss_logit_rescaled":
+
+        primary_signal = "loss"
+
+        if not os.path.exists(f"{log_dir}/meta_signal/{primary_signal}/"):
+            os.makedirs(f"{log_dir}/meta_signal/{primary_signal}/")
+
+        signal_path = f"{log_dir}/meta_signal/{primary_signal}/{model_index:04d}.npy"
+        # check if the primary signal has been computed
+        model_signal = create_or_load_signal_file(signal_path, dataset)
+
+        # check if we already queried the primary signals at the given indeces
+        # If not, query it
+        if np.isnan(model_signal[dataset_indeces]).sum()>0:
+            print("load the model and compute signals for model %d" % idx)
+            model_pm = model()
+            data, targets = get_dataset_subset(
+                dataset, dataset_indeces, config["train"]["model_name"], device=config["audit"]["device"]
+            )
+            model_signal[dataset_indeces] = get_signal_on_argumented_data(
+                    model_pm,
+                    data,
+                    targets,
+                    method=config["audit"]["argumentation"],
+            )
+            np.save(signal_path, model_signal)
+            return model_signal[dataset_indeces]
+        else:
+            print("loading signals for model %d" % idx)
+            return model_signal[dataset_indeces]
+    else:
+         raise NotImplementedError(f"signal {signal_name} has not yet been implemented...")
+
+
+
 def metric_results(fpr_list, tpr_list):
     acc = np.max(1 - (fpr_list + (1 - tpr_list)) / 2)
     roc_auc = auc(fpr_list, tpr_list)
@@ -451,24 +514,17 @@ if __name__ == "__main__":
         p_ratio = configs["data"]["keep_ratio"]
         dataset_size = len(dataset)
         # training_size = configs["data"]["dataset_size"]
+        number_of_models_lira = configs["train"]["num_in_models"] + configs["train"]["num_out_models"] + configs["train"]["num_target_model"]
         data_split_info, keep_matrix = prepare_datasets_for_online_attack_overlap(
             dataset_size=dataset_size,
             num_models=(
-                configs["train"]["num_in_models"]
-                + configs["train"]["num_out_models"]
-                + configs["train"]["num_target_model"]
+                number_of_models_lira
             ),
             configs=configs["data"]
         )
 
         ## Points from which we compute the actual signal
         target_and_test_idx = np.array(list(data_split_info["split"][0]["target"]) + list(data_split_info["split"][0]["test"]))
-        print(target_and_test_idx.shape, data_split_info["split"][0]["target"].shape, data_split_info["split"][0]["test"].shape)
-        data, targets = get_dataset_subset(
-            dataset, target_and_test_idx, configs["train"]["model_name"]
-        )
-        print(len(data), len(targets))
-
 
         logger.info(
             "Prepare the datasets costs %0.5f seconds",
@@ -489,21 +545,21 @@ if __name__ == "__main__":
             )
             baseline_time = time.time()
             signals = []
-            for model in model_list:
-                model_pm = PytorchModelTensor(
+            for i, model in enumerate(model_list):
+                model_init = lambda: PytorchModelTensor(
                     model_obj=model,
                     loss_fn=nn.CrossEntropyLoss(),
                     device=configs["audit"]["device"],
-                        batch_size=int(configs["audit"]["audit_batch_size"]),
+                    batch_size=int(configs["audit"]["audit_batch_size"]),
                 )
-                signals.append(
-                    get_signal_on_argumented_data(
-                        model_pm,
-                        data, # but we query a smaller dataset..
-                        targets,
-                        method=configs["audit"]["argumentation"],
-                    )
-                )
+                tmp_signal = collect_signal(model=model_init,
+                                            model_index=i,
+                                            dataset=dataset,
+                                            dataset_indeces=target_and_test_idx,
+                                            log_dir=log_dir,
+                                            signal_name=configs["audit"]["signal"],
+                                            config=configs)
+                signals.append(tmp_signal)
             logger.info(
                 "Prepare the signals costs %0.5f seconds",
                 time.time() - baseline_time,
@@ -511,40 +567,34 @@ if __name__ == "__main__":
         else:
             baseline_time = time.time()
             signals = []
-            number_of_models_lira = configs["train"]["num_in_models"] + configs["train"]["num_out_models"] + configs["train"]["num_target_model"]
-            for idx in range(number_of_models_lira): # we consider that we train lira online setting first.
-                print("load the model and compute signals for model %d" % idx)
-                model_pm = PytorchModelTensor(
-                    model_obj=load_existing_models(
-                        model_metadata_list,
-                        [idx],
-                        configs["train"]["model_name"],
-                        dataset,
-                    )[0],
-                    loss_fn=nn.CrossEntropyLoss(),
-                    device=configs["audit"]["device"],
+            # for idx in range(number_of_models_lira): # we consider that we train lira online setting first.
+            for idx in range(model_metadata_list["current_idx"]):
+                model_init = lambda: PytorchModelTensor(
+                        model_obj=load_existing_models(
+                            model_metadata_list,
+                            [idx],
+                            configs["train"]["model_name"],
+                            dataset,
+                            device=configs["audit"]["device"]
+                        )[0],
+                        loss_fn=nn.CrossEntropyLoss(),
+                        device=configs["audit"]["device"],
                         batch_size=int(configs["audit"]["audit_batch_size"]),
-                )
-                signals.append(
-                    get_signal_on_argumented_data(
-                        model_pm,
-                        data,
-                        targets,
-                        method=configs["audit"]["argumentation"],
                     )
-                )
+                tmp_signal = collect_signal(model=model_init,
+                                            model_index=idx,
+                                            dataset=dataset,
+                                            dataset_indeces=target_and_test_idx,
+                                            log_dir=log_dir,
+                                            signal_name=configs["audit"]["signal"],
+                                            config=configs)
+                signals.append(tmp_signal)
             logger.info(
                 "Prepare the signals costs %0.5f seconds",
                 time.time() - baseline_time,
             )
         baseline_time = time.time()
         signals = np.array(signals)
-
-        # target_signal = signals[-1:, :]  # LAST MODEL IS TARGET
-        # reference_signals = signals[:-1, :]
-        # reference_keep_matrix = keep_matrix[:-1, :]
-        # membership = keep_matrix[-1:, :]
-
 
         target_signal = signals[-1:, :] # LAST MODEL IS TARGET # shape 1 x N + M
         reference_signals = signals[:-1, :] # shape nb_models x N + M
@@ -592,7 +642,6 @@ if __name__ == "__main__":
         answers = []
         print(membership.shape, target_signal.shape, mean_in.shape, mean_out.shape)
         for ans, sc in zip(membership[:,:number_target], target_signal[:,:number_target]):
-            print(ans, sc)
             if str2bool(configs["audit"]["offline"]):
                 pr_in = 0
             else:
@@ -607,8 +656,9 @@ if __name__ == "__main__":
 
         prediction = np.array(prediction)
         answers = np.array(answers, dtype=bool)
+        print(prediction.shape, answers.shape, prediction, np.isnan(prediction).sum())
         # Last step: compute the metrics
-        fpr_list, tpr_list, _ = roc_curve(answers, -prediction)
+        fpr_list, tpr_list, _ = roc_curve(answers.ravel(), -prediction.ravel())
         acc = np.max(1 - (fpr_list + (1 - tpr_list)) / 2)
         roc_auc = auc(fpr_list, tpr_list)
         logger.info(

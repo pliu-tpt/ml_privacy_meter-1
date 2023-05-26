@@ -118,7 +118,7 @@ def get_dataset(dataset_name: str, data_dir: str):
 
 
 def get_dataset_subset(
-    dataset: torchvision.datasets, index: List(int), model_name="CNN", device="cuda:0"
+    dataset: torchvision.datasets, index: List(int), model_name="CNN", device="cuda"
 ):
     """Get a subset of the dataset.
 
@@ -145,7 +145,6 @@ def get_dataset_subset(
         size = len(index)
         list_divisors = list(set(factor for i in range(1, int(math.sqrt(size)) + 1) if size % i == 0 for factor in (i, size // i) if factor < MAX_BATCH_SIZE))
         batch_size = max(list_divisors)
-        print("Batch size for evaluation: ",batch_size)
 
         for inputs, targets in get_batches(
             data, key="eval", batchsize=batch_size, shuffle=False, device=device
