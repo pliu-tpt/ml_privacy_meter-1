@@ -155,6 +155,7 @@ def load_existing_models(
     model_name: str,
     # dataset_list=None,
     dataset=None,
+    device="cpu"
 ):
     """Load existing models from dicts for matched_idx.
 
@@ -179,7 +180,7 @@ def load_existing_models(
                     [0],
                     [0],
                 )
-                model = NetworkEMA(make_net(data))
+                model = NetworkEMA(make_net(data, device=device))
             with open(f"{metadata['model_path']}", "rb") as file:
                 model_weight = pickle.load(file)
             model.load_state_dict(model_weight)
@@ -602,14 +603,16 @@ def prepare_models(
                 dataset,
                 data_split["split"][split]["train"],
                 data_split["split"][split]["test"],
+                device=configs["device"]
             )
             print_training_details(
                 logging_columns_list, column_heads_only=True
             )  ## print out the training column heads before we print the actual content for each run.
             model, train_acc, train_loss, test_acc, test_loss = fast_train_fun(
                 data,
-                make_net(data),
+                make_net(data, device=configs["device"]),
                 eval_batchsize=int(data_split["split"][split]["test"].shape[0] / 2),
+                device=configs["device"]
             )
 
         model_list.append(copy.deepcopy(model))
@@ -822,11 +825,11 @@ def get_info_source_reference_attack(
     print(f"Load existing {len(reference_idx)} reference models")
     if "target" in data_split.keys():
         existing_reference_models = load_existing_models(
-        model_metadata_dict, reference_idx, configs["model_name"], dataset=dataset
+        model_metadata_dict, reference_idx, configs["model_name"], dataset=dataset, device=configs["device"]
     )
     else:
         existing_reference_models = load_existing_models(
-            model_metadata_dict, reference_idx, configs["model_name"]
+            model_metadata_dict, reference_idx, configs["model_name"], device=configs["device"]
         )
     reference_models = [
         PytorchModelTensor(
@@ -870,7 +873,7 @@ def get_info_source_reference_attack(
                 logging_columns_list, column_heads_only=True
             )  ## print out the training column heads before we print the actual content for each run.
             reference_model, train_acc, train_loss, _, _ = fast_train_fun(
-                data, make_net(data)
+                data, make_net(data, device=configs["audit"]["device"])
             )
 
         logging.info(

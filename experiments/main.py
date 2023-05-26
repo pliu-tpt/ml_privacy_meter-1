@@ -494,7 +494,7 @@ if __name__ == "__main__":
                     model_obj=model,
                     loss_fn=nn.CrossEntropyLoss(),
                     device=configs["audit"]["device"],
-                    batch_size=10000,
+                        batch_size=int(configs["audit"]["audit_batch_size"]),
                 )
                 signals.append(
                     get_signal_on_argumented_data(
@@ -523,7 +523,7 @@ if __name__ == "__main__":
                     )[0],
                     loss_fn=nn.CrossEntropyLoss(),
                     device=configs["audit"]["device"],
-                    batch_size=10000,
+                        batch_size=int(configs["audit"]["audit_batch_size"]),
                 )
                 signals.append(
                     get_signal_on_argumented_data(
