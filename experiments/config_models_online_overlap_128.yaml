@@ -12,6 +12,8 @@ audit: # Configurations for auditing
   offline: False # Indicate whether to use the offline setting
   argumentation: none # Indicate whether to use argumentation for the query points
 
+  signal: loss_logit_rescaled
+
 train: # Configuration for training
   type: pytorch # Training framework (we only support pytorch now).
   epochs: 20 #100 # Integer number for indicating the epochs for training target model.
@@ -33,7 +35,7 @@ data: # Configuration for data
   # dataset_size: 60000 # the size of the whole dataset used.
   f_train: 25000 # fraction or number of training samples used for each training model
   f_test: 10000 # fraction or number of test samples used for all the models
-  f_audit: 25000 # fraction or number of audit samples for all eventual reference models with no overlap
+  f_audit: 2 # fraction or number of audit samples for all eventual reference models with no overlap
   keep_ratio: 0.5 # the ratio of keeping the point for the training dataset.
   f_target: 1000 # fraction or number of target samples that are kept for a "keep_ratio" number of models
 

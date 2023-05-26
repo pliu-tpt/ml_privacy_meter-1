@@ -12,6 +12,8 @@ audit: # Configurations for auditing
   offline: False # Indicate whether to use the offline setting
   argumentation: none # Indicate whether to use argumentation for the query points
 
+  signal: loss_logit_rescaled
+
 train: # Configuration for training
   type: pytorch # Training framework (we only support pytorch now).
   epochs: 20 #100 # Integer number for indicating the epochs for training target model.
