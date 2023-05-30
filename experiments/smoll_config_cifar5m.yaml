@@ -24,7 +24,7 @@ train: # Configuration for training
   momentum: 0.9
   device: cuda:1 # String for indicating the device we want to use for training models.
   num_in_models: 2 # Integer number that indicates how many target models trained on idx
-  num_out_models: 2 # Integer number that indicates how many target models not trained on idx
+  num_out_models: 1 # Integer number that indicates how many target models not trained on idx
   num_target_model: 1 # Number of total models we want to test
 
 data: # Configuration for data
