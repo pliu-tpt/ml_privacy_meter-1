@@ -1,11 +1,10 @@
 #!/bin/bash
 
 base_files=(
-#"smoll_config_cifar5m.yaml"
-#"config_models_online_overlap.yaml"
-#"config_models_online_overlap_64.yaml"
-#"config_models_online_cifar5m_overlap.yaml"
-"config_models_online_cifar5m_overlap_64.yaml"
+"config_models_online_overlap_256.yaml"
+"config_models_online_overlap_128.yaml"
+"config_models_online_cifar5m_overlap_256.yaml"
+"config_models_online_cifar5m_overlap_128.yaml"
 )
 
 for base_yaml_file in "${base_files[@]}";

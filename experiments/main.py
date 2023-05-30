@@ -158,7 +158,7 @@ def collect_signal(model, model_index, dataset, dataset_indeces, log_dir, signal
         # check if we already queried the primary signals at the given indeces
         # If not, query it
         if np.isnan(model_signal[dataset_indeces]).sum()>0:
-            print("load the model and compute signals for model %d" % idx)
+            print("load the model and compute signals for model %d" % model_index)
             model_pm = model()
             data, targets = get_dataset_subset(
                 dataset, dataset_indeces, config["train"]["model_name"], device=config["audit"]["device"]

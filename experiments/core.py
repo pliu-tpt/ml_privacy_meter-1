@@ -4,6 +4,7 @@ import pickle
 import time
 from ast import List
 from pathlib import Path
+from itertools import product
 
 import numpy as np
 import torch
@@ -481,6 +482,9 @@ def prepare_datasets_for_online_attack_overlap(
         dict: Data split information.
         list: List of boolean indicating whether the model is trained on the target point.
     """
+    if num_models % 2 != 0:
+        raise Exception("The total number of models in this setting should be even (num_models = num_in_models + num_out_models + target_model)")
+
     # TODO make this work
     all_index = np.arange(dataset_size)
     train_size = convert_f_to_int(configs["f_train"], dataset_size)
@@ -503,12 +507,25 @@ def prepare_datasets_for_online_attack_overlap(
     # Step 2bis: select some independent audit points for attacks other than lira, with NO overlap with the rest
     rest_points_index, audit_index = train_test_split(rest_points_index, test_size=audit_size)
 
-    # Step 3: select which keep_ratio of models will train on which CERTAIN points
-    selected_matrix = np.random.uniform(0, 1, size=(num_models, target_points_size))
-    # This matrix num_models x nb_target_points, with each column a random order
-    order = selected_matrix.argsort(0)
-    # This matrix gives for each column if a target point is kept for each model's training set or not
-    sub_keep = order < int(keep_ratio * num_models)
+    # # Step 3: select which models will train on which CERTAIN points
+    sub_keep = np.full((num_models, target_points_size), False, dtype=bool)
+    while sub_keep.sum() != int(num_models * target_points_size / 2): # in case of an impossible draw
+        sub_keep = np.full((num_models, target_points_size), False, dtype=bool)
+        available_models_bins = np.arange(num_models) # list of available bins for all samples
+        for _, sample in product(range(int(num_models/2)), range(target_points_size)):
+            sample_bins = np.argwhere(sub_keep[:, sample] == False).ravel() # bins that aren't sampled yet
+            available_bin_intersection = np.array(list(set(available_models_bins) & set(sample_bins)))
+            if len(available_bin_intersection) == 0: # this means that this iteration didn't work
+                print("Beginning again...")
+                break
+            else:
+                random_bin = np.random.choice(available_bin_intersection, 1)[0]
+                sub_keep[random_bin, sample] = True
+                if np.sum(sub_keep[random_bin, :]) >= int(target_points_size/2):
+                    # Removing bin {random_bin} from the list of available bins
+                    available_models_bins = np.delete(available_models_bins, np.where(available_models_bins == random_bin))
+
+    print("Finished constructing sampling...")
 
     # Step 4: create the final matrix of membership
     keep = np.full((num_models, dataset_size), False, dtype=bool)
@@ -543,8 +560,12 @@ def prepare_datasets_for_online_attack_overlap(
 
     # Step 6.2: Make sure that each CERTAIN target is in test is indeed in half of the model's train set
     for sample_idx in target_points_index:
-        if sum(keep[:, sample_idx]) % 2 != 0:
+        if keep[:, sample_idx].sum() != int(num_models/2):
             raise Exception("A sample is not in half of the model's dataset...")
+    
+    for model in range(num_models):
+        if keep[model, target_points_index].sum() != int(target_points_size/2):
+            raise Exception("A model does not have half of the target set...")
 
     dataset_splits = {"split": index_list, "split_method": f"random_{keep_ratio}"}
     return dataset_splits, keep
