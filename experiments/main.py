@@ -5,11 +5,11 @@ import os
 import pickle
 import time
 from pathlib import Path
-
+import random
 import numpy as np
 import torch
 import yaml
-from argument import get_signal_on_argumented_data
+from augment import get_signal_on_augmented_data
 from core import (
     load_dataset_for_existing_models,
     load_existing_models,
@@ -60,6 +60,7 @@ def setup_log(name: str, save_file: bool):
 
     return my_logger
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -78,6 +79,7 @@ if __name__ == "__main__":
     # Set the random seed, log_dir and inference_game
     torch.manual_seed(configs["run"]["random_seed"])
     np.random.seed(configs["run"]["random_seed"])
+    random.seed(configs["run"]["random_seed"])
 
     log_dir = configs["run"]["log_dir"]
     inference_game_type = configs["audit"]["privacy_game"].upper()
@@ -100,9 +102,7 @@ if __name__ == "__main__":
         model_metadata_list = {"model_metadata": {}, "current_idx": 0}
     # Load the dataset
     baseline_time = time.time()
-    dataset = get_dataset(
-        configs["data"]["dataset"], configs["data"]["data_dir"]
-    )
+    dataset = get_dataset(configs["data"]["dataset"], configs["data"]["data_dir"])
 
     privacy_game = configs["audit"]["privacy_game"]
 
@@ -156,7 +156,12 @@ if __name__ == "__main__":
         baseline_time = time.time()
 
         new_model_list, model_metadata_list, new_target_model_idx_list = prepare_models(
-            log_dir, dataset, data_split_info, configs["train"], model_metadata_list, configs["data"]["dataset"]
+            log_dir,
+            dataset,
+            data_split_info,
+            configs["train"],
+            model_metadata_list,
+            configs["data"]["dataset"],
         )
 
         # Combine the trained models with the existing models
@@ -189,7 +194,7 @@ if __name__ == "__main__":
             model_metadata_list,
             target_model_idx_list,
             configs["train"]["model_name"],
-            configs["data"]["dataset"]
+            configs["data"]["dataset"],
         )
         logger.info(
             "Prepare the information source costs %0.5f seconds",
@@ -269,7 +274,7 @@ if __name__ == "__main__":
                 data_split_info_in,
                 configs["train"],
                 model_metadata_list,
-                configs["data"]["dataset"]
+                configs["data"]["dataset"],
             )
             model_in_list = [*new_in_model_list, *model_in_list]
             in_model_idx_list = [*new_matched_in_idx, *in_model_idx_list]
@@ -277,7 +282,7 @@ if __name__ == "__main__":
             PytorchModelTensor(
                 model_obj=model,
                 loss_fn=nn.CrossEntropyLoss(),
-                batch_size=configs["audit_batch_size"],
+                batch_size=configs["audit"]["audit_batch_size"],
                 device=configs["audit"]["device"],
             )
             for model in model_in_list
@@ -322,7 +327,7 @@ if __name__ == "__main__":
                 data_split_info_out,
                 configs["train"],
                 model_metadata_list,
-                configs["data"]["dataset"]
+                configs["data"]["dataset"],
             )
             model_out_list = [*new_out_model_list, *model_out_list]
             out_model_idx_list = [*new_matched_out_idx, *out_model_idx_list]
@@ -331,7 +336,7 @@ if __name__ == "__main__":
             PytorchModelTensor(
                 model_obj=model,
                 loss_fn=nn.CrossEntropyLoss(),
-                batch_size=configs["audit_batch_size"],
+                batch_size=configs["audit"]["audit_batch_size"],
                 device=configs["audit"]["device"],
             )
             for model in model_out_list
@@ -339,7 +344,10 @@ if __name__ == "__main__":
 
         # Test the models' performance on the data indicated by the audit.idx
         data, targets = get_dataset_subset(
-            dataset, [configs["audit"]["data_idx"]], configs["audit"]["model_name"], device=configs["audit"]["device"]
+            dataset,
+            [configs["audit"]["data_idx"]],
+            configs["audit"]["model_name"],
+            device=configs["audit"]["device"],
         )
         in_signal = np.array(
             [
@@ -378,17 +386,23 @@ if __name__ == "__main__":
         baseline_time = time.time()
         p_ratio = configs["data"]["keep_ratio"]
         dataset_size = configs["data"]["dataset_size"]
-        number_of_models_lira = configs["train"]["num_in_models"] + configs["train"]["num_out_models"] + configs["train"]["num_target_model"]
-        data_split_info, keep_matrix = prepare_datasets_for_online_attack(
+        number_of_models_total = (
+            configs["train"]["num_in_models"]
+            + configs["train"]["num_out_models"]
+            + configs["train"]["num_target_model"]
+        )
+        data_split_info, keep_matrix, target_data_index = prepare_datasets_for_online_attack(
+            len(dataset),
             dataset_size,
-            num_models=(
-                number_of_models_lira
-            ),
+            num_models=(number_of_models_total),
             keep_ratio=p_ratio,
             is_uniform=False,
         )
         data, targets = get_dataset_subset(
-            dataset, np.arange(dataset_size), configs["train"]["model_name"], device=configs["train"]["device"]
+            dataset,
+            target_data_index,
+            configs["train"]["model_name"],
+            device=configs["train"]["device"],
         )  # only the train dataset we want to attack
         logger.info(
             "Prepare the datasets costs %0.5f seconds",
@@ -403,7 +417,7 @@ if __name__ == "__main__":
                 data_split_info,
                 configs["train"],
                 model_metadata_list,
-                configs["data"]["dataset"]
+                configs["data"]["dataset"],
             )
             logger.info(
                 "Prepare the models costs %0.5f seconds",
@@ -419,11 +433,11 @@ if __name__ == "__main__":
                     batch_size=configs["audit"]["audit_batch_size"],
                 )
                 signals.append(
-                    get_signal_on_argumented_data(
+                    get_signal_on_augmented_data(
                         model_pm,
                         data,
                         targets,
-                        method=configs["audit"]["argumentation"],
+                        method=configs["audit"]["augmentation"],
                     )
                 )
             logger.info(
@@ -448,11 +462,11 @@ if __name__ == "__main__":
                     batch_size=10000,
                 )
                 signals.append(
-                    get_signal_on_argumented_data(
+                    get_signal_on_augmented_data(
                         model_pm,
                         data,
                         targets,
-                        method=configs["audit"]["argumentation"],
+                        method=configs["audit"]["augmentation"],
                     )
                 )
             logger.info(
@@ -464,12 +478,10 @@ if __name__ == "__main__":
 
         # number of models we want to consider as test
         n_test = 1
-        target_signal = signals[-n_test:, :]
-        reference_signals = signals[:-n_test, :]
-        reference_keep_matrix = keep_matrix[:-n_test, :]
-        membership = keep_matrix[-n_test:, :]
-
-        print(reference_signals.shape, target_signal.shape)
+        target_signal = signals[:n_test, :]
+        reference_signals = signals[n_test:, :]
+        reference_keep_matrix = keep_matrix[n_test:, :]
+        membership = keep_matrix[:n_test, :]
         in_signals = []
         out_signals = []
 
@@ -504,7 +516,7 @@ if __name__ == "__main__":
                 pr_in = -norm.logpdf(sc, mean_in, std_in + 1e-30)
             pr_out = -norm.logpdf(sc, mean_out, std_out + 1e-30)
             score = pr_in - pr_out
-            if len(score.shape) == 2:  # the score is of size (data_size, num_arguments)
+            if len(score.shape) == 2:  # the score is of size (data_size, num_augments)
                 prediction.extend(score.mean(1))
                 fpr_list, tpr_list, _ = roc_curve(ans, -score.mean(1))
             else:
@@ -516,7 +528,6 @@ if __name__ == "__main__":
 
         prediction = np.array(prediction)
         answers = np.array(answers, dtype=bool)
-        print(prediction.shape, answers.shape, prediction, np.isnan(prediction).sum())
         fpr_list, tpr_list, _ = roc_curve(answers.ravel(), -prediction.ravel())
         acc = np.max(1 - (fpr_list + (1 - tpr_list)) / 2)
         roc_auc = auc(fpr_list, tpr_list)
@@ -530,7 +541,7 @@ if __name__ == "__main__":
             fpr_list,
             tpr_list,
             roc_auc,
-            f"{log_dir}/{configs['audit']['report_log']}/online_attack.png",
+            f"{log_dir}/{configs['audit']['report_log']}/ROC.png",
         )
 
     ############################
