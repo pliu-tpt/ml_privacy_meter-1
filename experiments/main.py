@@ -9,7 +9,7 @@ import random
 import numpy as np
 import torch
 import yaml
-from augment import get_signal_on_augmented_data
+from augment import get_signal_on_augmented_data, get_rpop_on_augmented_data
 from core import (
     load_dataset_for_existing_models,
     load_existing_models,
@@ -39,6 +39,7 @@ from privacy_meter.model import PytorchModelTensor
 
 torch.backends.cudnn.benchmark = True
 
+from scipy.stats import norm, trim_mean
 
 def setup_log(name: str, save_file: bool):
     """Generate the logger for the current run.
@@ -112,6 +113,7 @@ if __name__ == "__main__":
     if (
         privacy_game in ["avg_privacy_loss_training_algo", "privacy_loss_model"]
         and "online" not in configs["audit"]["algorithm"]
+        and "rpop" not in configs["audit"]["algorithm"]
     ):
         # Load the trained models from disk
         if model_metadata_list["current_idx"] > 0:
@@ -543,6 +545,194 @@ if __name__ == "__main__":
             roc_auc,
             f"{log_dir}/{configs['audit']['report_log']}/ROC.png",
         )
+    
+
+
+
+    ############################
+    # Privacy auditing for an model with online attack (i.e., adversary trains models with/without each target points)
+    ############################
+    elif "rpop" in configs["audit"]["algorithm"]:
+        # The following code is modified from the original code in the repo: https://github.com/tensorflow/privacy/tree/master/research/mi_lira_2021
+        baseline_time = time.time()
+        p_ratio = configs["data"]["keep_ratio"]
+        dataset_size = configs["data"]["dataset_size"]
+        number_of_models_total = (
+            configs["train"]["num_in_models"]
+            + configs["train"]["num_out_models"]
+            + configs["train"]["num_target_model"]
+        )
+        data_split_info, keep_matrix, target_data_index = prepare_datasets_for_online_attack(
+            len(dataset),
+            dataset_size,
+            num_models=(number_of_models_total),
+            keep_ratio=p_ratio,
+            is_uniform=False,
+        )
+        data, targets = get_dataset_subset(
+            dataset,
+            target_data_index,
+            configs["train"]["model_name"],
+            device=configs["train"]["device"],
+        )  # only the train dataset we want to attack
+        logger.info(
+            "Prepare the datasets costs %0.5f seconds",
+            time.time() - baseline_time,
+        )
+        baseline_time = time.time()
+        if model_metadata_list["current_idx"] == 0:
+            # if the models are already trained and saved in the disk
+            (model_list, model_metadata_dict, trained_model_idx_list) = prepare_models(
+                log_dir,
+                dataset,
+                data_split_info,
+                configs["train"],
+                model_metadata_list,
+                configs["data"]["dataset"],
+            )
+            logger.info(
+                "Prepare the models costs %0.5f seconds",
+                time.time() - baseline_time,
+            )
+            baseline_time = time.time()
+            signals = []
+            for model in model_list:
+                model_pm = PytorchModelTensor(
+                    model_obj=model,
+                    loss_fn=nn.CrossEntropyLoss(),
+                    device=configs["audit"]["device"],
+                    batch_size=configs["audit"]["audit_batch_size"],
+                )
+                signals.append(
+                    get_rpop_on_augmented_data(
+                        model_pm,
+                        data,
+                        targets,
+                        method=configs["audit"]["augmentation"],
+                    )
+                )
+            logger.info(
+                "Prepare the signals costs %0.5f seconds",
+                time.time() - baseline_time,
+            )
+        else:
+            baseline_time = time.time()
+            signals = []
+            for idx in range(model_metadata_list["current_idx"]):
+                print("Load the model and compute signals for model %d" % idx)
+                model_pm = PytorchModelTensor(
+                    model_obj=load_existing_models(
+                        model_metadata_list,
+                        [idx],
+                        configs["train"]["model_name"],
+                        dataset,
+                        configs["data"]["dataset"],
+                    )[0],
+                    loss_fn=nn.CrossEntropyLoss(),
+                    device=configs["audit"]["device"],
+                    batch_size=10000,
+                )
+                signals.append(
+                    get_rpop_on_augmented_data(
+                        model_pm,
+                        data,
+                        targets,
+                        method=configs["audit"]["augmentation"],
+                    )
+                )
+            logger.info(
+                "Prepare the signals costs %0.5f seconds",
+                time.time() - baseline_time,
+            )
+        baseline_time = time.time()
+        signals = np.array(signals)
+
+        # number of models we want to consider as test
+        n_test = 1
+        target_signal = signals[:n_test, :]
+        reference_signals = signals[n_test:, :]
+        reference_keep_matrix = keep_matrix[n_test:, :]
+        membership = keep_matrix[:n_test, :]
+        in_signals = []
+        out_signals = []
+
+        for data_idx in range(dataset_size):
+            in_signals.append(
+                torch.from_numpy(reference_signals[reference_keep_matrix[:, data_idx], data_idx])
+            )
+            out_signals.append(
+                torch.from_numpy(reference_signals[~reference_keep_matrix[:, data_idx], data_idx])
+            )
+        
+        in_size = min(min(map(len, in_signals)), configs["train"]["num_in_models"])
+        out_size = min(min(map(len, out_signals)), configs["train"]["num_out_models"])
+        in_or_out_size = min(in_size, out_size)
+        in_signals = torch.stack([x[:in_or_out_size] for x in in_signals]) # shape dataset_size x out_or_in_size x nb_augmentations
+        out_signals = torch.stack([x[:in_or_out_size] for x in out_signals]) # shape dataset_size x out_or_in_size x nb_augmentations
+
+        ref_signals = (torch.cat((in_signals, out_signals), dim=1)).transpose(0, 1) # online case, half-in, half-out
+        
+        population_indices = (membership==False).squeeze()
+        proptocut=0.2
+        if configs["audit"]["augmentation"] == "augmented": # using augmentation
+            def majority_voting_tensor(tensor, axis): # compute majority voting for a bool tensor along a certain axis 
+                return torch.mode(torch.stack(tensor), axis).values * 1.0
+
+            nb_augmentations = in_signals.shape[2]
+            augmented_gammas = [] # contains for each augmentation the boolean matrix (after thresholding by gamma)
+
+            all_mean_x = trim_mean(ref_signals[:,:,:], proportiontocut=proptocut, axis=0)
+            all_mean_z = trim_mean(ref_signals[:,population_indices,:], proportiontocut=proptocut, axis=0)
+
+            for k in range(0, nb_augmentations): 
+                mean_x = all_mean_x[:,k]
+                mean_z = all_mean_z[:,k]
+
+                prob_ratio_x = torch.from_numpy(target_signal[0, :, k].ravel() / (mean_x)) # zero is for 1 target model...
+                prob_ratio_z_rev = 1 / torch.from_numpy(target_signal[0, population_indices, k].ravel() / (mean_z))
+
+                # shape nb_targets x nb_population
+                score = torch.outer(prob_ratio_x, prob_ratio_z_rev)
+
+                augmented_gammas.append((score > float(configs["audit"]["gamma"])))
+
+            augmented_test = majority_voting_tensor(augmented_gammas, axis=0)
+
+            prediction = -np.array(augmented_test.mean(1).reshape(1,len(mean_x)))
+            answers = np.array(membership, dtype=bool)
+        
+        else:
+            mean_x = trim_mean(ref_signals[:,:], proportiontocut=proptocut, axis=0)
+            mean_z = trim_mean(ref_signals[:,population_indices], proportiontocut=proptocut, axis=0)
+
+            prob_ratio_x = (target_signal[0, :].ravel() / (mean_x))
+            prob_ratio_z_rev = 1 / (target_signal[0, population_indices].ravel() / (mean_z)) # the inverse to compute quickly
+
+            final_scores = torch.outer(prob_ratio_x, prob_ratio_z_rev)
+
+            signal_gamma = -((final_scores > float(configs["audit"]["gamma"]) )*1.0).mean(1).reshape(1,len(mean_x))
+            
+            prediction = np.array(signal_gamma)
+            answers = np.array(membership, dtype=bool)
+
+        prediction = np.array(prediction)
+        answers = np.array(answers, dtype=bool)
+        fpr_list, tpr_list, _ = roc_curve(answers.ravel(), -prediction.ravel())
+        acc = np.max(1 - (fpr_list + (1 - tpr_list)) / 2)
+        roc_auc = auc(fpr_list, tpr_list)
+        logger.info(
+            "Prepare the privacy risks results costs %0.5f seconds",
+            time.time() - baseline_time,
+        )
+        low = tpr_list[np.where(fpr_list < 0.001)[0][-1]]
+        print("AUC %.4f, Accuracy %.4f, TPR@0.1%%FPR of %.4f" % (roc_auc, acc, low))
+        plot_roc(
+            fpr_list,
+            tpr_list,
+            roc_auc,
+            f"{log_dir}/{configs['audit']['report_log']}/ROC.png",
+        )
+        
 
     ############################
     # END

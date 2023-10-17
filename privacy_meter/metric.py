@@ -679,7 +679,7 @@ class ReferenceMetric(Metric):
             self.reference_non_member_signals, self.quantiles
         )
 
-        num_threshold = len(self.quantiles)
+        num_threshold = len(self.quantiles) # note: those quantiles are given by the attacker, which is different from swiping all the possible values for an auditor.
         member_signals = self.member_signals.reshape(-1, 1).repeat(num_threshold, 1).T
         non_member_signals = (
             self.non_member_signals.reshape(-1, 1).repeat(num_threshold, 1).T

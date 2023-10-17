@@ -701,7 +701,6 @@ class PytorchModelTensor(Model):
         Args:
             batch_samples: Model input.
             batch_labels: Model expected output.
-            per_point: Boolean indicating if loss should be returned per point or reduced.
 
         Returns:
             The loss value, as defined by the loss_fn attribute.
@@ -727,6 +726,90 @@ class PytorchModelTensor(Model):
             all_rescaled_logits = np.concatenate(rescaled_list)
         self.model_obj.to("cpu")
         return all_rescaled_logits
+    
+    def get_softmax(self, batch_samples, batch_labels):
+        """Function to get the model's correct softmax probability on a given input and an expected output.
+
+        Args:
+            batch_samples: Model input.
+            batch_labels: Model expected output.
+
+        Returns:
+            The softmax values
+        """
+        self.model_obj.to(self.device)
+        self.model_obj.eval()
+        with torch.no_grad():
+            softmax_list = []
+            batched_samples = torch.split(batch_samples, self.batch_size)
+            batched_labels = torch.split(batch_labels, self.batch_size)
+            for x, y in zip(batched_samples, batched_labels):
+                COUNT = len(x)
+                x = x.to(self.device)
+                y = y.to(self.device)
+                pred = self.model_obj(x)
+                y = y.to("cpu")
+                confi = softmax(pred.detach().cpu().numpy(), axis=1)
+                confi_corret = confi[np.arange(COUNT), y]
+                softmax_list.append(confi_corret)
+            all_softmax_list = np.concatenate(softmax_list)
+        self.model_obj.to("cpu")
+        return all_softmax_list
+    
+    def get_taylor_softmax_margin(self, batch_samples, batch_labels, margin=0.6, taylor_order=4, temp=2.0):
+        """Function to get the model's correct softmax probability on a given input and an expected output.
+
+        Args:
+            batch_samples: Model input.
+            batch_labels: Model expected output.
+            margin: margin of the softmax-margin
+            taylor_order: order of the talor approximation
+            temp: temperature applied to the logtis when computing the signal
+
+        Returns:
+            The taylor-softmax margin values.
+        """
+        m, n = margin, taylor_order
+        self.model_obj.to(self.device)
+        self.model_obj.eval()
+
+        def factorial(n):
+            fact = 1
+            for i in range(2, n + 1):
+                fact = fact * i
+            return fact
+
+        def get_taylor(logit_signals, n):
+            power = logit_signals
+            taylor = power + 1.0
+            for i in range(2, n):
+                power = power * logit_signals
+                taylor = taylor + (power / factorial(i))
+            return taylor
+
+        with torch.no_grad():
+            signal_list = []
+            batched_samples = torch.split(batch_samples, self.batch_size)
+            batched_labels = torch.split(batch_labels, self.batch_size)
+            for x, y in zip(batched_samples, batched_labels):
+                x = x.to(self.device)
+                y = y.to(self.device)
+                pred = self.model_obj(x)
+                logit_signals = torch.div(pred, temp)
+                taylor_logits = get_taylor(logit_signals, n)
+                taylor_logit_sum = taylor_logits.sum(axis=1).reshape(-1, 1)
+                true_logit = logit_signals.gather(1, y.reshape(-1, 1))
+                taylor_true_logit = taylor_logits.gather(1, y.reshape(-1, 1))
+                taylor_logit_sum = taylor_logit_sum - taylor_true_logit
+                soft_taylor_true_logit = get_taylor(true_logit - m, n)
+                taylor_logit_sum = taylor_logit_sum + soft_taylor_true_logit
+                output_signals = torch.div(soft_taylor_true_logit, taylor_logit_sum)
+                y = y.to("cpu")
+                signal_list.append(output_signals.to("cpu"))
+            all_signals_list = np.concatenate(signal_list)
+        self.model_obj.to("cpu")
+
+        return all_signals_list
 
 
 class Sklearn_Model(Model):
