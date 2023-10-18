@@ -705,8 +705,8 @@ if __name__ == "__main__":
             mean_x = trim_mean(ref_signals[:,:], proportiontocut=proptocut, axis=0)
             mean_z = trim_mean(ref_signals[:,population_indices], proportiontocut=proptocut, axis=0)
 
-            prob_ratio_x = (target_signal[0, :].ravel() / (mean_x))
-            prob_ratio_z_rev = 1 / (target_signal[0, population_indices].ravel() / (mean_z)) # the inverse to compute quickly
+            prob_ratio_x = torch.from_numpy(target_signal[0, :].ravel() / (mean_x))
+            prob_ratio_z_rev = 1 / torch.from_numpy(target_signal[0, population_indices].ravel() / (mean_z)) # the inverse to compute quickly
 
             final_scores = torch.outer(prob_ratio_x, prob_ratio_z_rev)
 

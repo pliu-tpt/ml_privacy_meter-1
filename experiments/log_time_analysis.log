@@ -1,4 +1,4 @@
-2023-10-17 18:42:26,669 INFO     Prepare the datasets costs 10.84370 seconds
-2023-10-17 18:43:15,523 INFO     Prepare the signals costs 48.85265 seconds
-2023-10-17 18:43:15,883 INFO     Prepare the privacy risks results costs 0.36008 seconds
-2023-10-17 18:43:17,686 INFO     Run the priavcy meter for the all steps costs 61.97320 seconds
+2023-10-18 16:39:48,026 INFO     Prepare the datasets costs 12.74588 seconds
+2023-10-18 16:40:23,184 INFO     Prepare the signals costs 35.15772 seconds
+2023-10-18 16:40:25,755 INFO     Prepare the privacy risks results costs 2.57022 seconds
+2023-10-18 16:40:27,632 INFO     Run the priavcy meter for the all steps costs 52.46440 seconds

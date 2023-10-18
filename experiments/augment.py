@@ -45,7 +45,7 @@ def get_rpop_on_augmented_data(model_pm, data, targets, method=None):
             return np.transpose(np.array(outs)[:,:], (1, 0))  # (batch size, number of aug)
 
     else:
-        return model_pm.get_softmax(this_x, targets) # model_pm.get_taylor_softmax_margin(data, targets)
+        return model_pm.get_softmax(data, targets) # model_pm.get_taylor_softmax_margin(data, targets)
 
 
 def get_augmented_data(data, targets, method=None):
