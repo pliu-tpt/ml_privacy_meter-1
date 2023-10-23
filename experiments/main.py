@@ -41,9 +41,10 @@ torch.backends.cudnn.benchmark = True
 
 from scipy.stats import norm, trim_mean
 
-def setup_log(name: str, save_file: bool):
+def setup_log(report_dir: str, name: str, save_file: bool) -> logging.Logger:
     """Generate the logger for the current run.
     Args:
+        report_dir (str): folder name of the audit
         name (str): Logging file name.
         save_file (bool): Flag about whether to save to file.
     Returns:
@@ -51,9 +52,16 @@ def setup_log(name: str, save_file: bool):
     """
     my_logger = logging.getLogger(name)
     my_logger.setLevel(logging.INFO)
+
     if save_file:
-        log_format = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
-        filename = f"log_{name}.log"
+        log_format = logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(message)s"
+            )
+        filename = f"{report_dir}/log_{name}.log"
+
+        if not Path(filename).is_file():
+            open(filename, 'w+')
+
         log_handler = logging.FileHandler(filename, mode="w")
         log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(log_format)
@@ -85,13 +93,13 @@ if __name__ == "__main__":
     log_dir = configs["run"]["log_dir"]
     inference_game_type = configs["audit"]["privacy_game"].upper()
 
-    # Set up the logger
-    logger = setup_log("time_analysis", configs["run"]["time_log"])
-
     # Create folders for saving the logs if they do not exist
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     report_dir = f"{log_dir}/{configs['audit']['report_log']}"
     Path(report_dir).mkdir(parents=True, exist_ok=True)
+
+    # Set up the logger
+    logger = setup_log(report_dir, "time_analysis", configs["run"]["time_log"])
 
     start_time = time.time()
 
@@ -538,7 +546,10 @@ if __name__ == "__main__":
             time.time() - baseline_time,
         )
         low = tpr_list[np.where(fpr_list < 0.001)[0][-1]]
-        print("AUC %.4f, Accuracy %.4f, TPR@0.1%%FPR of %.4f" % (roc_auc, acc, low))
+        lowest = tpr_list[np.where(fpr_list <= 0.0)[0][-1]]
+        logger.info(
+            "AUC %.4f, Accuracy %.4f, TPR@0.1%%FPR of %.4f, TPR@0.0%%FPR of %.4f" % (roc_auc, acc, low, lowest)
+        )
         plot_roc(
             fpr_list,
             tpr_list,
@@ -630,7 +641,7 @@ if __name__ == "__main__":
                     )[0],
                     loss_fn=nn.CrossEntropyLoss(),
                     device=configs["audit"]["device"],
-                    batch_size=10000,
+                    batch_size=configs["audit"]["audit_batch_size"],
                 )
                 signals.append(
                     get_rpop_on_augmented_data(
@@ -725,7 +736,10 @@ if __name__ == "__main__":
             time.time() - baseline_time,
         )
         low = tpr_list[np.where(fpr_list < 0.001)[0][-1]]
-        print("AUC %.4f, Accuracy %.4f, TPR@0.1%%FPR of %.4f" % (roc_auc, acc, low))
+        lowest = tpr_list[np.where(fpr_list <= 0.0)[0][-1]]
+        logger.info(
+            "AUC %.4f, Accuracy %.4f, TPR@0.1%%FPR of %.4f, TPR@0.0%%FPR of %.4f" % (roc_auc, acc, low, lowest)
+        )
         plot_roc(
             fpr_list,
             tpr_list,

@@ -6,7 +6,7 @@ def get_signal_on_augmented_data(model_pm, data, targets, method=None):
     if method == "augmented":
         # implement your own way of using the augmented data for inferring membership
         reflect = True
-        shift = 0
+        shift = 1
         stride = 1
 
         outs = []
@@ -27,8 +27,9 @@ def get_signal_on_augmented_data(model_pm, data, targets, method=None):
 def get_rpop_on_augmented_data(model_pm, data, targets, method=None):
     if method == "augmented":
         # implement your own way of using the augmented data for inferring membership
+        # hardcoded
         reflect = True
-        shift = 0
+        shift = 1
         stride = 1
 
         outs = []
