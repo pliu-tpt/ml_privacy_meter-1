@@ -22,7 +22,7 @@ from core import (
     prepare_priavcy_risk_report,
 )
 from dataset import get_dataset, get_dataset_subset
-from plot import plot_roc, plot_signal_histogram
+from plot import plot_roc, plot_roc_log, plot_signal_histogram
 from scipy.stats import norm
 from sklearn.metrics import auc, roc_curve
 from torch import nn
@@ -491,7 +491,7 @@ if __name__ == "__main__":
         target_signal = signals[:n_test, :]
         reference_signals = signals[n_test:, :]
         reference_keep_matrix = keep_matrix[n_test:, :]
-        membership = keep_matrix[:n_test, :]
+        membership = keep_matrix[:n_test, :] # nb models (in + out + target) x dataset_size (train + test)
         in_signals = []
         out_signals = []
 
@@ -505,8 +505,9 @@ if __name__ == "__main__":
 
         in_size = min(min(map(len, in_signals)), configs["train"]["num_in_models"])
         out_size = min(min(map(len, out_signals)), configs["train"]["num_out_models"])
-        in_signals = np.array([x[:in_size] for x in in_signals]).astype("float32")
-        out_signals = np.array([x[:out_size] for x in out_signals]).astype("float32")
+        in_or_out_size = min(in_size, out_size)
+        in_signals = np.array([x[:in_or_out_size] for x in in_signals]).astype("float32") # shape dataset_size x out_or_in_size x nb_augmentations
+        out_signals = np.array([x[:in_or_out_size] for x in out_signals]).astype("float32") # shape dataset_size x out_or_in_size x nb_augmentations
         mean_in = np.median(in_signals, 1)
         mean_out = np.median(out_signals, 1)
         fix_variance = configs["audit"]["fix_variance"]
@@ -556,6 +557,19 @@ if __name__ == "__main__":
             roc_auc,
             f"{log_dir}/{configs['audit']['report_log']}/ROC.png",
         )
+
+        plot_roc_log(
+            fpr_list,
+            tpr_list,
+            roc_auc,
+            f"{log_dir}/{configs['audit']['report_log']}/ROC_log.png",
+        )
+
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/attack_data",
+                 fpr_list=fpr_list,
+                tpr_list=fpr_list,
+                roc_auc=fpr_list,
+                 )
     
 
 
@@ -683,7 +697,7 @@ if __name__ == "__main__":
 
         ref_signals = (torch.cat((in_signals, out_signals), dim=1)).transpose(0, 1) # online case, half-in, half-out
         
-        population_indices = (membership==False).squeeze()
+        population_indices = np.random.choice(dataset_size, size=25000) # (membership==False).squeeze() # 
         proptocut=0.2
         if configs["audit"]["augmentation"] == "augmented": # using augmentation
             def majority_voting_tensor(tensor, axis): # compute majority voting for a bool tensor along a certain axis 
@@ -746,6 +760,19 @@ if __name__ == "__main__":
             roc_auc,
             f"{log_dir}/{configs['audit']['report_log']}/ROC.png",
         )
+
+        plot_roc_log(
+            fpr_list,
+            tpr_list,
+            roc_auc,
+            f"{log_dir}/{configs['audit']['report_log']}/ROC_log.png",
+        )
+
+        np.savez(f"{log_dir}/{configs['audit']['report_log']}/attack_data",
+                 fpr_list=fpr_list,
+                tpr_list=fpr_list,
+                roc_auc=fpr_list,
+                 )
         
 
     ############################

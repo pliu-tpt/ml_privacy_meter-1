@@ -5,14 +5,13 @@ run: # Configurations for a specific run
 
 audit: # Configurations for auditing
   privacy_game: privacy_loss_model # Indicate the privacy game from privacy_loss_model, avg_privacy_loss_training_algo, privacy_loss_sample
-  algorithm: rpop # String for indicating the membership inference attack. We currently support population, reference.
-  report_log: report_rpop_normal # String that indicates the folder where we save the and auditing report.
-  device: cuda:1
+  algorithm: online # String for indicating the membership inference attack. We currently support population, reference.
+  report_log: report_online # String that indicates the folder where we save the and auditing report.
+  device: cuda:0
   fix_variance: True # Indicate hwether to fix the variance of the signals for all data points
   offline: False # Indicate whether to use the offline setting
-  augmentation: None # Indicate whether to use augmentation for the query points
-  audit_batch_size: 1000
-  gamma: 2.0
+  augmentation: augmented # Indicate whether to use augmentation for the query points
+  audit_batch_size: 5000
 
 train: # Configuration for training
   type: pytorch # Training framework (we only support pytorch now).

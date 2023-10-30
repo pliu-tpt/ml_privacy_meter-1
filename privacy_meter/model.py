@@ -727,7 +727,7 @@ class PytorchModelTensor(Model):
         self.model_obj.to("cpu")
         return all_rescaled_logits
     
-    def get_softmax(self, batch_samples, batch_labels):
+    def get_softmax(self, batch_samples, batch_labels, temp=1.0):
         """Function to get the model's correct softmax probability on a given input and an expected output.
 
         Args:
@@ -744,14 +744,18 @@ class PytorchModelTensor(Model):
             batched_samples = torch.split(batch_samples, self.batch_size)
             batched_labels = torch.split(batch_labels, self.batch_size)
             for x, y in zip(batched_samples, batched_labels):
-                COUNT = len(x)
                 x = x.to(self.device)
                 y = y.to(self.device)
                 pred = self.model_obj(x)
+                logit_signals = torch.div(pred, temp)
+                max_logit_signals, max_indices = torch.max(logit_signals, dim=1)
+                logit_signals = torch.sub(logit_signals, max_logit_signals.reshape(-1, 1))
+                exp_logit_signals = torch.exp(logit_signals)
+                exp_logit_sum = exp_logit_signals.sum(axis=1).reshape(-1, 1)
+                true_exp_logit = exp_logit_signals.gather(1, y.reshape(-1, 1))
+                softmax_list.append(torch.div(true_exp_logit, exp_logit_sum).to('cpu'))
+                x = x.to("cpu")
                 y = y.to("cpu")
-                confi = softmax(pred.detach().cpu().numpy(), axis=1)
-                confi_corret = confi[np.arange(COUNT), y]
-                softmax_list.append(confi_corret)
             all_softmax_list = np.concatenate(softmax_list)
         self.model_obj.to("cpu")
         return all_softmax_list
